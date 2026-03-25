@@ -1,108 +1,79 @@
-"""车流量统计模块：通过虚拟计数线判断自行车穿越事件 (增强防抖版)"""
 from __future__ import annotations
 
-from campus_bike_detection.models import CountLine, FlowEvent, Track
+from campus_bike_detection.models import CountLine, Track
 
 
 class FlowCounter:
-    def __init__(self, count_lines: list[CountLine]) -> None:
-        self._count_lines = count_lines
-        self._events: list[FlowEvent] = []
-        # 改为记录上次跨线时的 track.age (绝对存活帧数)，用于设置严格的冷却期
-        self._last_cross_age: dict[tuple[int, str], int] = {}
+    """Direction-aware counting with jitter and debounce guards."""
 
-    @staticmethod
-    def _segments_intersect(
-        p1: tuple[float, float],
-        p2: tuple[float, float],
-        p3: tuple[float, float],
-        p4: tuple[float, float],
-    ) -> bool:
-        """判断线段 p1→p2 与 p3→p4 是否相交（叉积跨立实验）"""
-        def cross(o, a, b) -> float:
-            return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+    def __init__(self, line: CountLine, direction: str = "both", min_cross: float = 0.003, debounce_frames: int = 5) -> None:
+        self.line = line
+        self.direction = direction
+        self.min_cross = min_cross
+        self.debounce_frames = debounce_frames
 
-        d1 = cross(p3, p4, p1)
-        d2 = cross(p3, p4, p2)
-        d3 = cross(p1, p2, p3)
-        d4 = cross(p1, p2, p4)
+        self.counted_ids: set[int] = set()
+        self.last_side: dict[int, float] = {}
+        self.last_count_frame: dict[int, int] = {}
+        self.total = 0
+        self.forward = 0
+        self.backward = 0
 
-        if ((d1 > 0 and d2 < 0) or (d1 < 0 and d2 > 0)) and \
-           ((d3 > 0 and d4 < 0) or (d3 < 0 and d4 > 0)):
+    def _point_side(self, p: tuple[float, float]) -> float:
+        x1, y1 = self.line.start
+        x2, y2 = self.line.end
+        px, py = p
+        return (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
+
+    def _is_allowed_direction(self, prev: float, cur: float) -> bool:
+        if self.direction == "both":
             return True
+        if self.direction == "forward":
+            return prev < 0 < cur
+        if self.direction == "backward":
+            return prev > 0 > cur
         return False
 
-    @staticmethod
-    def _crossing_direction(
-        line: CountLine,
-        prev_pos: tuple[float, float],
-        curr_pos: tuple[float, float],
-    ) -> str:
-        """用运动方向与计数线法向量的点积判断穿越方向"""
-        dx = line.end[0] - line.start[0]
-        dy = line.end[1] - line.start[1]
-        nx, ny = -dy, dx  # 法向量
-        mx = curr_pos[0] - prev_pos[0]
-        my = curr_pos[1] - prev_pos[1]
-        dot = nx * mx + ny * my
-        return "forward" if dot > 0 else "backward"
-
-    def update(self, tracks: list[Track], timestamp: float) -> list[FlowEvent]:
-        """检测轨迹是否穿越计数线，返回本帧产生的穿越事件列表"""
-        frame_events: list[FlowEvent] = []
-
+    def update(self, tracks: list[Track], frame_idx: int) -> int:
         for track in tracks:
-            traj = track.trajectory
-            if len(traj) < 2:
+            cx = (track.bbox[0] + track.bbox[2]) * 0.5
+            cy = (track.bbox[1] + track.bbox[3]) * 0.5
+            cur_side = self._point_side((cx, cy))
+
+            prev_side = self.last_side.get(track.track_id)
+            self.last_side[track.track_id] = cur_side
+            if prev_side is None:
                 continue
 
-            prev_pos = traj[-2]
-            curr_pos = traj[-1]
+            if track.track_id in self.counted_ids:
+                continue
 
-            for line in self._count_lines:
-                key = (track.track_id, line.line_id)
+            if prev_side * cur_side >= 0:
+                continue
 
-                # =========================================================
-                # 核心防抖逻辑：获取该 ID 上次跨线时的绝对生命值 (age)
-                # =========================================================
-                last_cross_age = self._last_cross_age.get(key, -1)
-                
-                # 设置 30 帧 (约 1 秒) 的严格冷却期。
-                # 只要一辆车跨过线，接下来 1 秒内无论它怎么倒退、框怎么抖动，都绝对不会再算一次。
-                if last_cross_age >= 0 and (track.age - last_cross_age) < 30:
-                    continue
+            if not self._is_allowed_direction(prev_side, cur_side):
+                continue
 
-                if not self._segments_intersect(prev_pos, curr_pos, line.start, line.end):
-                    continue
+            if min(abs(prev_side), abs(cur_side)) < self.min_cross:
+                continue
 
-                direction = self._crossing_direction(line, prev_pos, curr_pos)
+            last_count = self.last_count_frame.get(track.track_id, -10**9)
+            if frame_idx - last_count <= self.debounce_frames:
+                continue
 
-                # 方向过滤
-                if line.direction != "both" and direction != line.direction:
-                    continue
+            self.last_count_frame[track.track_id] = frame_idx
+            self.counted_ids.add(track.track_id)
+            self.total += 1
+            if prev_side < 0 < cur_side:
+                self.forward += 1
+            elif prev_side > 0 > cur_side:
+                self.backward += 1
 
-                event = FlowEvent(
-                    track_id=track.track_id,
-                    line_id=line.line_id,
-                    timestamp=timestamp,
-                    direction=direction,
-                )
-                
-                # 记录这辆车跨线时的准确生命值，开启冷却锁
-                self._last_cross_age[key] = track.age
-                self._events.append(event)
-                frame_events.append(event)
+        return self.total
 
-        return frame_events
-
-    def get_flow_stats(self, window_seconds: float = 60.0) -> dict[str, int]:
-        """返回各计数线在最近 window_seconds 内的穿越事件数量"""
-        result = {line.line_id: 0 for line in self._count_lines}
-        if not self._events:
-            return result
-        latest_ts = self._events[-1].timestamp
-        cutoff = latest_ts - window_seconds
-        for event in self._events:
-            if event.timestamp >= cutoff and event.line_id in result:
-                result[event.line_id] += 1
-        return result
+    def snapshot_counts(self) -> dict[str, int]:
+        return {
+            self.line.line_id: self.total,
+            f"{self.line.line_id}_forward": self.forward,
+            f"{self.line.line_id}_backward": self.backward,
+        }
