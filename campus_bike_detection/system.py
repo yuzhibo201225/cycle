@@ -26,7 +26,12 @@ class BikeDetectionSystem:
             imgsz=cfg.imgsz,
         )
         self.tracker = BikeTracker(iou_thresh=0.3, max_misses=20)
-        self.counter = FlowCounter(cfg.line)
+        self.counter = FlowCounter(
+            cfg.line,
+            direction=cfg.count_direction,
+            min_cross=cfg.count_min_cross,
+            debounce_frames=cfg.count_debounce_frames,
+        )
 
     def __enter__(self) -> BikeDetectionSystem:
         self.detector.warmup()
@@ -40,7 +45,6 @@ class BikeDetectionSystem:
         frame_count = 0
         peak_count = 0
         fps_values: list[float] = []
-        start = time.perf_counter()
 
         while True:
             ok, frame = self.cap.read()
@@ -52,7 +56,7 @@ class BikeDetectionSystem:
             tracks = self.tracker.update(detections)
             current_count = len(tracks)
             peak_count = max(peak_count, current_count)
-            total_flow = self.counter.update(tracks)
+            total_flow = self.counter.update(tracks, frame_count)
             fps = 1.0 / max(time.perf_counter() - t0, 1e-6)
             fps_values.append(fps)
 
@@ -69,7 +73,7 @@ class BikeDetectionSystem:
             avg_fps=avg_fps,
             peak_count=peak_count,
             total_count=self.tracker.total_unique(),
-            line_counts={self.cfg.line.line_id: self.counter.total},
+            line_counts=self.counter.snapshot_counts(),
         )
 
     def _draw(self, frame, tracks, current_count: int, flow_count: int, fps: float) -> None:
@@ -78,13 +82,46 @@ class BikeDetectionSystem:
             x1, y1, x2, y2 = tr.bbox
             p1, p2 = (int(x1 * w), int(y1 * h)), (int(x2 * w), int(y2 * h))
             cv2.rectangle(frame, p1, p2, (0, 255, 0), 2)
-            cv2.putText(frame, f"ID:{tr.track_id}", (p1[0], max(15, p1[1] - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+            cv2.putText(
+                frame,
+                f"ID:{tr.track_id} Conf:{tr.confidence:.2f}",
+                (p1[0], max(15, p1[1] - 6)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (0, 255, 0),
+                1,
+            )
+
+            if self.cfg.draw_trails and tr.trajectory:
+                pts = [(int(px * w), int(py * h)) for px, py in tr.trajectory[-20:]]
+                for i in range(1, len(pts)):
+                    cv2.line(frame, pts[i - 1], pts[i], (255, 180, 0), 1)
+                side = self.counter.last_side.get(tr.track_id, 0.0)
+                side_label = "A" if side >= 0 else "B"
+                cv2.putText(
+                    frame,
+                    f"S:{side_label}",
+                    (p1[0], min(h - 8, p2[1] + 14)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.45,
+                    (255, 180, 0),
+                    1,
+                )
 
         ls = (int(self.cfg.line.start[0] * w), int(self.cfg.line.start[1] * h))
         le = (int(self.cfg.line.end[0] * w), int(self.cfg.line.end[1] * h))
         cv2.line(frame, ls, le, (0, 0, 255), 2)
 
-        cv2.putText(frame, f"FPS:{fps:.1f}", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        cv2.putText(frame, f"Count:{current_count}", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        cv2.putText(frame, f"Flow:{flow_count}", (10, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 255), 2)
+        cv2.putText(frame, f"FPS:{fps:.1f}", (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv2.putText(frame, f"Count:{current_count}", (10, 49), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        cv2.putText(frame, f"Flow:{flow_count}", (10, 74), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 255), 2)
+        cv2.putText(
+            frame,
+            f"Fwd:{self.counter.forward} Bwd:{self.counter.backward}",
+            (10, 99),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            (100, 230, 255),
+            2,
+        )
         cv2.imshow("Campus Bike Detection", frame)

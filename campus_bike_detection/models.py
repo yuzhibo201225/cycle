@@ -45,3 +45,7 @@ class SystemConfig:
     imgsz: int = 640
     show: bool = True
     line: CountLine = field(default_factory=lambda: CountLine("main", (0.05, 0.5), (0.95, 0.5)))
+    count_direction: str = "both"  # both|forward|backward
+    count_min_cross: float = 0.003
+    count_debounce_frames: int = 5
+    draw_trails: bool = True

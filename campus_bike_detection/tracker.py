@@ -1,4 +1,4 @@
-from __future__ import annotations
+rom __future__ import annotations
 
 from dataclasses import dataclass
 
@@ -13,11 +13,19 @@ class _State:
 
 
 class BikeTracker:
-    """Fast IoU tracker for ONNX/TensorRT, with stable IDs for counting."""
+    """Fast IoU tracker with motion/scale gates for more stable IDs."""
 
-    def __init__(self, iou_thresh: float = 0.3, max_misses: int = 20) -> None:
+    def __init__(
+        self,
+        iou_thresh: float = 0.3,
+        max_misses: int = 20,
+        max_center_step: float = 0.18,
+        max_area_ratio: float = 2.8,
+    ) -> None:
         self.iou_thresh = iou_thresh
         self.max_misses = max_misses
+        self.max_center_step = max_center_step
+        self.max_area_ratio = max_area_ratio
         self.next_id = 1
         self.states: dict[int, _State] = {}
         self.seen_ids: set[int] = set()
@@ -30,6 +38,8 @@ class BikeTracker:
             best_det = None
             best_iou = self.iou_thresh
             for det in dets:
+                if not self._is_plausible_match(state.bbox, det.bbox):
+                    continue
                 score = _iou(state.bbox, det.bbox)
                 if score > best_iou:
                     best_iou = score
@@ -39,13 +49,14 @@ class BikeTracker:
                 if state.misses > self.max_misses:
                     self.states.pop(tid, None)
                 continue
+
             dets.remove(best_det)
             cx, cy = _center(best_det.bbox)
             state.bbox = best_det.bbox
             state.misses = 0
             state.traj.append((cx, cy))
-            if len(state.traj) > 30:
-                state.traj = state.traj[-30:]
+            if len(state.traj) > 40:
+                state.traj = state.traj[-40:]
             assigned[tid] = best_det
 
         for det in dets:
@@ -61,8 +72,19 @@ class BikeTracker:
             tracks.append(Track(track_id=tid, bbox=det.bbox, confidence=det.confidence, trajectory=self.states[tid].traj))
         return tracks
 
+    def _is_plausible_match(self, prev: tuple[float, float, float, float], cur: tuple[float, float, float, float]) -> bool:
+        pcx, pcy = _center(prev)
+        ccx, ccy = _center(cur)
+        if ((pcx - ccx) ** 2 + (pcy - ccy) ** 2) ** 0.5 > self.max_center_step:
+            return False
+
+        pa = max((prev[2] - prev[0]) * (prev[3] - prev[1]), 1e-9)
+        ca = max((cur[2] - cur[0]) * (cur[3] - cur[1]), 1e-9)
+        ratio = max(pa / ca, ca / pa)
+        return ratio <= self.max_area_ratio
+
     def total_unique(self) -> int:
-        return max(len(self.seen_ids), len(self.states))
+        return len(self.seen_ids)
 
 
 def _center(b: tuple[float, float, float, float]) -> tuple[float, float]:
