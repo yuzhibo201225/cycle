@@ -1,0 +1,17 @@
+# 自定义 BoT-SORT 追踪器配置 (专为校园自行车鲁棒检测调优)
+tracker_type: botsort
+
+# 1. 匹配阈值 (适应远景与模糊)
+track_high_thresh: 0.35  # 降低初次匹配门槛，远处的自行车也能被锁定
+track_low_thresh: 0.1    # 维持较低的二次容忍度，哪怕只露出一半车轮也能认出来
+new_track_thresh: 0.45   # 初始新轨迹门槛，防止把路面阴影误认为新车
+
+# 2. 核心抗遮挡参数 (防 ID 切换)
+track_buffer: 90         # ⭐核心参数⭐ 缓存 90 帧(约3秒)。给被大树/公交车彻底挡住的自行车足够的时间重新出现，保持 ID 不变
+match_thresh: 0.85       # 提高框的匹配严格度，防止密集人群中两辆并排的自行车互相交换 ID
+
+# 3. 抵抗摄像头微抖动
+gmc_method: sparseOptFlow  # 启用稀疏光流全局运动补偿 (对抗刮风导致的摄像头轻微摇晃)
+proximity_thresh: 0.5
+appearance_thresh: 0.25
+with_reid: False         # 保持 False，基础模型不需要重识别特征提取
