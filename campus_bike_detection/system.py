@@ -74,7 +74,7 @@ class BikeDetectionSystem:
             total_frames=frame_count,
             avg_fps=avg_fps,
             peak_count=peak_count,
-            total_count=self.tracker.total_unique(),
+            total_count=self.counter.total,
             line_counts=self.counter.snapshot_counts(),
         )
 
