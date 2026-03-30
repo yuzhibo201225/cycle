@@ -12,8 +12,8 @@ class FlowCounter:
         direction: str = "both",
         min_cross: float = 0.003,
         debounce_frames: int = 5,
-        duplicate_window_frames: int = 30,
-        duplicate_distance: float = 0.06,
+        duplicate_window_frames: int = 90,
+        duplicate_distance: float = 0.12,
     ) -> None:
         self.line = line
         self.direction = direction

@@ -48,4 +48,6 @@ class SystemConfig:
     count_direction: str = "both"  # both|forward|backward
     count_min_cross: float = 0.003
     count_debounce_frames: int = 5
+    count_duplicate_window_frames: int = 90
+    count_duplicate_distance: float = 0.12
     draw_trails: bool = True
