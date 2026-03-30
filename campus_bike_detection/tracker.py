@@ -1,4 +1,4 @@
-rom __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass
 
@@ -13,7 +13,7 @@ class _State:
 
 
 class BikeTracker:
-    """Fast IoU tracker with motion/scale gates for more stable IDs."""
+    """Fast IoU tracker with motion/scale gates and lightweight re-id for stable totals."""
 
     def __init__(
         self,
@@ -21,14 +21,24 @@ class BikeTracker:
         max_misses: int = 20,
         max_center_step: float = 0.18,
         max_area_ratio: float = 2.8,
+        reid_window_frames: int = 120,
+        reid_max_center_step: float = 0.22,
     ) -> None:
         self.iou_thresh = iou_thresh
         self.max_misses = max_misses
         self.max_center_step = max_center_step
         self.max_area_ratio = max_area_ratio
+        self.reid_window_frames = reid_window_frames
+        self.reid_max_center_step = reid_max_center_step
+
         self.next_id = 1
         self.states: dict[int, _State] = {}
-        self.seen_ids: set[int] = set()
+
+        self.frame_idx = 0
+        self.track_to_global: dict[int, int] = {}
+        self.next_global_id = 1
+        self.seen_globals: set[int] = set()
+        self.recent_ended: list[tuple[int, tuple[float, float, float, float], int]] = []
 
     def update(self, detections: list[Detection]) -> list[Track]:
         dets = list(detections)
@@ -38,7 +48,7 @@ class BikeTracker:
             best_det = None
             best_iou = self.iou_thresh
             for det in dets:
-                if not self._is_plausible_match(state.bbox, det.bbox):
+                if not self._is_plausible_match(state.bbox, det.bbox, self.max_center_step):
                     continue
                 score = _iou(state.bbox, det.bbox)
                 if score > best_iou:
@@ -47,6 +57,9 @@ class BikeTracker:
             if best_det is None:
                 state.misses += 1
                 if state.misses > self.max_misses:
+                    gid = self.track_to_global.pop(tid, None)
+                    if gid is not None:
+                        self.recent_ended.append((self.frame_idx, state.bbox, gid))
                     self.states.pop(tid, None)
                 continue
 
@@ -59,23 +72,38 @@ class BikeTracker:
                 state.traj = state.traj[-40:]
             assigned[tid] = best_det
 
+        self._prune_recent_ended()
+
         for det in dets:
             tid = self.next_id
             self.next_id += 1
             cx, cy = _center(det.bbox)
             self.states[tid] = _State(det.bbox, 0, [(cx, cy)])
             assigned[tid] = det
-            self.seen_ids.add(tid)
+
+            gid = self._match_recent_global(det.bbox)
+            if gid is None:
+                gid = self.next_global_id
+                self.next_global_id += 1
+            self.track_to_global[tid] = gid
+            self.seen_globals.add(gid)
 
         tracks: list[Track] = []
         for tid, det in assigned.items():
             tracks.append(Track(track_id=tid, bbox=det.bbox, confidence=det.confidence, trajectory=self.states[tid].traj))
+
+        self.frame_idx += 1
         return tracks
 
-    def _is_plausible_match(self, prev: tuple[float, float, float, float], cur: tuple[float, float, float, float]) -> bool:
+    def _is_plausible_match(
+        self,
+        prev: tuple[float, float, float, float],
+        cur: tuple[float, float, float, float],
+        max_center_step: float,
+    ) -> bool:
         pcx, pcy = _center(prev)
         ccx, ccy = _center(cur)
-        if ((pcx - ccx) ** 2 + (pcy - ccy) ** 2) ** 0.5 > self.max_center_step:
+        if ((pcx - ccx) ** 2 + (pcy - ccy) ** 2) ** 0.5 > max_center_step:
             return False
 
         pa = max((prev[2] - prev[0]) * (prev[3] - prev[1]), 1e-9)
@@ -83,8 +111,29 @@ class BikeTracker:
         ratio = max(pa / ca, ca / pa)
         return ratio <= self.max_area_ratio
 
+    def _prune_recent_ended(self) -> None:
+        self.recent_ended = [
+            item for item in self.recent_ended if self.frame_idx - item[0] <= self.reid_window_frames
+        ]
+
+    def _match_recent_global(self, bbox: tuple[float, float, float, float]) -> int | None:
+        best_gid = None
+        best_dist = self.reid_max_center_step
+        cx, cy = _center(bbox)
+
+        for _, old_bbox, gid in self.recent_ended:
+            if not self._is_plausible_match(old_bbox, bbox, self.reid_max_center_step):
+                continue
+            ox, oy = _center(old_bbox)
+            dist = ((cx - ox) ** 2 + (cy - oy) ** 2) ** 0.5
+            if dist < best_dist:
+                best_dist = dist
+                best_gid = gid
+
+        return best_gid
+
     def total_unique(self) -> int:
-        return len(self.seen_ids)
+        return len(self.seen_globals)
 
 
 def _center(b: tuple[float, float, float, float]) -> tuple[float, float]:

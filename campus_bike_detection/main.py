@@ -22,6 +22,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--count-direction", default="both", choices=["both", "forward", "backward"])
     parser.add_argument("--count-min-cross", default=0.003, type=float)
     parser.add_argument("--count-debounce-frames", default=5, type=int)
+    parser.add_argument("--count-duplicate-window-frames", default=90, type=int)
+    parser.add_argument("--count-duplicate-distance", default=0.12, type=float)
     parser.add_argument("--no-trails", action="store_true", help="disable track trails and side debug overlay")
     parser.add_argument("--no-show", action="store_true")
     return parser.parse_args()
@@ -55,6 +57,8 @@ def main() -> None:
         count_direction=args.count_direction,
         count_min_cross=args.count_min_cross,
         count_debounce_frames=args.count_debounce_frames,
+        count_duplicate_window_frames=args.count_duplicate_window_frames,
+        count_duplicate_distance=args.count_duplicate_distance,
         draw_trails=not args.no_trails,
     )
 

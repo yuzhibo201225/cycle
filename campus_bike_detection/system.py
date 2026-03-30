@@ -31,6 +31,8 @@ class BikeDetectionSystem:
             direction=cfg.count_direction,
             min_cross=cfg.count_min_cross,
             debounce_frames=cfg.count_debounce_frames,
+            duplicate_window_frames=cfg.count_duplicate_window_frames,
+            duplicate_distance=cfg.count_duplicate_distance,
         )
 
     def __enter__(self) -> BikeDetectionSystem:
