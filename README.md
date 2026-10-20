@@ -44,3 +44,14 @@ python -m campus_bike_detection.main --source 0 --model yolov8n.engine --backend
 - First choice: `yolov8n`.
 - For edge throughput: TensorRT FP16 / INT8.
 - For CPU-only board: ONNX + `--imgsz 320` + `--no-show`.
+## 支持独立开发 | Support My Work
+
+我是 Dean AI Studio 的开发者，主要从事 Python 自动化、AI 工具与计算机视觉相关项目。
+
+我已入驻爱发电，未来会持续分享原创软件工具和开发进展。
+
+**爱发电官方主页：** https://afdian.com/a/deanaistudio
+
+感谢大家对独立开发的支持！
+
+*Dean AI Studio — AI Tools & Automation*
